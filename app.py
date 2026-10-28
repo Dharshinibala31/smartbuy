@@ -41,6 +41,19 @@ MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", 
 SELLER_ETA = {"amazon": 2, "flipkart": 3, "croma": 4, "reliance digital": 4,
               "tata cliq": 4, "vijay sales": 4, "myntra": 3, "ajio": 4}
 AREA_EXTRA = {"Metro city": 0, "Other city": 2, "Remote area": 4}
+SORT_OPTIONS = ["Lowest final price", "Highest rating"]
+
+# Default values for the sidebar filters (used on first load and by the Reset button)
+DEFAULT_FILTERS = {
+    "budget_override": 0,
+    "min_rating": 3.5,
+    "free_only": False,
+    "max_days": 0,
+    "area": "Metro city",
+    "sort_by": "Lowest final price",
+    "coupon": "",
+    "auto_buy": False,
+}
 
 def estimate_eta(seller, area):
     base = 5
@@ -173,21 +186,64 @@ def remove_item(i):
 # ---------------- sidebar: navigation + rules ----------------
 if "page" not in st.session_state:
     st.session_state.page = PAGES[0]
+if "filters" not in st.session_state:
+    st.session_state.filters = DEFAULT_FILTERS.copy()
 
 st.sidebar.title("🛒 SmartBuy AI")
 st.sidebar.radio("Go to", PAGES, key="page")
 st.sidebar.divider()
 st.sidebar.subheader("Your rules")
-budget_override = st.sidebar.number_input("Max total budget (₹)", min_value=0, value=0,
-                                          help="0 = use the budget from my sentence")
-min_rating = st.sidebar.slider("Minimum rating", 0.0, 5.0, 3.5, 0.1)
-free_only = st.sidebar.checkbox("Free delivery only")
-max_days = st.sidebar.number_input("Deliver within (days)", min_value=0, value=0,
-                                   help="0 = any delivery time")
-area = st.sidebar.selectbox("Delivery area", list(AREA_EXTRA))
-sort_by = st.sidebar.selectbox("Rank by", ["Lowest final price", "Highest rating"])
-coupon = st.sidebar.text_input("Coupon code", placeholder="e.g. SAVE10").strip().upper()
-auto_buy = st.sidebar.checkbox("Allow auto-buy (opens seller page)")
+
+_f = st.session_state.filters  # currently APPLIED filters
+
+with st.sidebar.form("filters_form"):
+    _budget = st.number_input("Max total budget (₹)", min_value=0, value=int(_f["budget_override"]),
+                              help="0 = use the budget from my sentence")
+    _rating = st.slider("Minimum rating", 0.0, 5.0, float(_f["min_rating"]), 0.1)
+    _free = st.checkbox("Free delivery only", value=_f["free_only"])
+    _days = st.number_input("Deliver within (days)", min_value=0, value=int(_f["max_days"]),
+                            help="0 = any delivery time")
+    _area = st.selectbox("Delivery area", list(AREA_EXTRA),
+                         index=list(AREA_EXTRA).index(_f["area"]))
+    _sort = st.selectbox("Rank by", SORT_OPTIONS, index=SORT_OPTIONS.index(_f["sort_by"]))
+    _coupon = st.text_input("Coupon code", value=_f["coupon"], placeholder="e.g. SAVE10")
+    _auto = st.checkbox("Allow auto-buy (opens seller page)", value=_f["auto_buy"])
+
+    _c1, _c2 = st.columns(2)
+    _apply = _c1.form_submit_button("✅ Apply", type="primary", use_container_width=True)
+    _reset = _c2.form_submit_button("↩️ Reset", use_container_width=True)
+
+if _apply:
+    st.session_state.filters = {
+        "budget_override": _budget,
+        "min_rating": _rating,
+        "free_only": _free,
+        "max_days": _days,
+        "area": _area,
+        "sort_by": _sort,
+        "coupon": _coupon.strip().upper(),
+        "auto_buy": _auto,
+    }
+    # If results are already on screen, re-run the search with the new rules
+    if st.session_state.get("res"):
+        st.session_state.run = True
+    st.sidebar.success("Filters applied")
+elif _reset:
+    st.session_state.filters = DEFAULT_FILTERS.copy()
+    if st.session_state.get("res"):
+        st.session_state.run = True
+    st.sidebar.info("Filters reset")
+
+# The rest of the app reads ONLY these applied values
+_f = st.session_state.filters
+budget_override = _f["budget_override"]
+min_rating = _f["min_rating"]
+free_only = _f["free_only"]
+max_days = _f["max_days"]
+area = _f["area"]
+sort_by = _f["sort_by"]
+coupon = _f["coupon"]
+auto_buy = _f["auto_buy"]
 
 # ---------------- pages ----------------
 def page_home():
@@ -333,7 +389,7 @@ def page_shop():
                 st.success("Approved and logged. Complete payment on the seller site:")
                 st.link_button("Complete on seller site", best["link"])
         else:
-            st.caption("Auto-buy is off. Tick 'Allow auto-buy' in the sidebar to enable checkout.")
+            st.caption("Auto-buy is off. Tick 'Allow auto-buy' in the sidebar and press Apply to enable checkout.")
 
     with st.expander(f"Rejected options and why ({len(rejected)})"):
         for it, why in rejected:
