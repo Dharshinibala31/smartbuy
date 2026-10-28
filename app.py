@@ -37,6 +37,19 @@ COUPONS = {
 
 MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 
+# Estimated delivery days per seller (used only when the API gives no real delivery time)
+SELLER_ETA = {"amazon": 2, "flipkart": 3, "croma": 4, "reliance digital": 4,
+              "tata cliq": 4, "vijay sales": 4, "myntra": 3, "ajio": 4}
+AREA_EXTRA = {"Metro city": 0, "Other city": 2, "Remote area": 4}
+
+def estimate_eta(seller, area):
+    base = 5
+    for name, days in SELLER_ETA.items():
+        if name in str(seller or "").lower():
+            base = days
+            break
+    return base + AREA_EXTRA[area]
+
 # ---------------- helpers ----------------
 def gemini(prompt):
     last = ""
@@ -171,6 +184,7 @@ min_rating = st.sidebar.slider("Minimum rating", 0.0, 5.0, 3.5, 0.1)
 free_only = st.sidebar.checkbox("Free delivery only")
 max_days = st.sidebar.number_input("Deliver within (days)", min_value=0, value=0,
                                    help="0 = any delivery time")
+area = st.sidebar.selectbox("Delivery area", list(AREA_EXTRA))
 sort_by = st.sidebar.selectbox("Rank by", ["Lowest final price", "Highest rating"])
 coupon = st.sidebar.text_input("Coupon code", placeholder="e.g. SAVE10").strip().upper()
 auto_buy = st.sidebar.checkbox("Allow auto-buy (opens seller page)")
@@ -224,6 +238,9 @@ def do_search(q):
     for it in items:
         disc = COUPONS[applied][1](it["price"]) if applied else 0
         it = dict(it, discount=disc, final=it["price"] + it["delivery"] - disc)
+        if it.get("eta") is None:
+            it["eta"] = estimate_eta(it.get("seller"), area)
+            it["est"] = True
         rating = float(it["rating"]) if it["rating"] is not None else None
         if free_only and it["delivery"] > 0:
             rejected.append((it, "paid delivery"))
@@ -300,8 +317,8 @@ def page_shop():
                 if it["discount"]:
                     line += f" − coupon ₹{it['discount']:,.0f}"
                 st.write(f"{line} = **₹{it['final']:,.0f}**  |  {it['seller']}  |  rating: {it['rating'] or 'n/a'}")
-                st.caption(f"🚚 Arrives in ~{it['eta']} days" if it.get("eta") is not None
-                           else "🚚 Delivery time: check seller site")
+                tag = " (estimated)" if it.get("est") else ""
+                st.caption(f"🚚 Arrives in ~{it['eta']} days{tag}")
                 b1, b2 = st.columns(2)
                 if it.get("link"):
                     b1.link_button("View on seller site", it["link"])
