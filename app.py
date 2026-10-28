@@ -15,10 +15,15 @@ GEMINI_MODEL = "gemini-2.5-flash"  # if you get a model error, copy the current 
 
 # ---------- helpers ----------
 def gemini(prompt):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}"
-    r = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30)
-    r.raise_for_status()
-    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    last = ""
+    for model in [GEMINI_MODEL, "gemini-2.0-flash", "gemini-2.5-flash-lite"]:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        r = requests.post(url, headers={"x-goog-api-key": GEMINI_KEY},
+                          json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30)
+        if r.ok:
+            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        last = f"{model}: {r.status_code} {r.text[:300]}"
+    raise RuntimeError("Gemini failed -> " + last)
 
 def understand(text):
     p = ('Extract shopping rules from this request. Reply ONLY with JSON like '
