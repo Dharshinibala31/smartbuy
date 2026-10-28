@@ -11,12 +11,12 @@ def get_key(name):
 
 SERPER_KEY = get_key("SERPER_KEY")
 GEMINI_KEY = get_key("GEMINI_KEY")
-GEMINI_MODEL = "gemini-2.5-flash"  # if you get a model error, copy the current name from aistudio.google.com
+GEMINI_MODEL = "gemini-2.5-flash-lite"  # if you get a model error, copy the current name from aistudio.google.com
 
 # ---------- helpers ----------
 def gemini(prompt):
     last = ""
-    for model in [GEMINI_MODEL, "gemini-2.0-flash", "gemini-2.5-flash-lite"]:
+    for model in [GEMINI_MODEL, "gemini-3.5-flash", "gemini-2.5-flash"]:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         r = requests.post(url, headers={"x-goog-api-key": GEMINI_KEY},
                           json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30)
