@@ -23,7 +23,9 @@ def gemini(prompt):
         if r.ok:
             return r.json()["candidates"][0]["content"]["parts"][0]["text"]
         last = f"{model}: {r.status_code} {r.text[:300]}"
-    raise RuntimeError("Gemini failed -> " + last)
+    st.error("Gemini failed -> " + last)
+    st.stop()
+    
 
 def understand(text):
     p = ('Extract shopping rules from this request. Reply ONLY with JSON like '
