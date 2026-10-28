@@ -1,4 +1,5 @@
 import os, re, json, sqlite3, requests
+from datetime import date
 import streamlit as st
 
 st.set_page_config(page_title="SmartBuy AI", page_icon="🛒", layout="wide")
@@ -34,6 +35,8 @@ COUPONS = {
     "WELCOME50": ("Rs 50 off", lambda p: 50),
 }
 
+MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+
 # ---------------- helpers ----------------
 def gemini(prompt):
     last = ""
@@ -65,6 +68,28 @@ def understand(text):
         product = re.sub(r"(under|below|within|rupees|rs\.?|₹|\d[\d,]*)", "", text, flags=re.I).strip()
         return {"product": product or text, "budget": to_num(m.group(1)) if m else None}
 
+def parse_eta(text):
+    """Return estimated delivery time in days, or None if unknown."""
+    d = str(text or "").lower()
+    if "today" in d:
+        return 0
+    if "tomorrow" in d:
+        return 1
+    m = re.search(r"(\d+)\s*(?:-\s*(\d+))?\s*days?", d)
+    if m:
+        return int(m.group(2) or m.group(1))
+    m = re.search(r"(\d{1,2})\s*(" + "|".join(MONTHS) + ")", d)
+    if m:
+        today = date.today()
+        try:
+            t = date(today.year, MONTHS.index(m.group(2)) + 1, int(m.group(1)))
+        except ValueError:
+            return None
+        if t < today:
+            t = t.replace(year=today.year + 1)
+        return (t - today).days
+    return None
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def search_products(product):
     r = requests.post(
@@ -80,10 +105,17 @@ def search_products(product):
         if price is None:
             continue
         d = str(it.get("delivery", "")).lower()
-        delivery = 0 if (not d or "free" in d) else (to_num(d) or 0)
+        # delivery COST: only read a number if it looks like a money amount
+        if not d or "free" in d:
+            delivery = 0
+        elif "₹" in d or "rs" in d:
+            delivery = to_num(d) or 0
+        else:
+            delivery = 0
         items.append({
             "title": it.get("title"), "seller": it.get("source"),
             "price": price, "delivery": delivery,
+            "eta": parse_eta(it.get("delivery")),   # delivery TIME in days (None = unknown)
             "rating": it.get("rating"), "link": it.get("link"),
             "image": it.get("imageUrl"),
         })
@@ -137,6 +169,8 @@ budget_override = st.sidebar.number_input("Max total budget (₹)", min_value=0,
                                           help="0 = use the budget from my sentence")
 min_rating = st.sidebar.slider("Minimum rating", 0.0, 5.0, 3.5, 0.1)
 free_only = st.sidebar.checkbox("Free delivery only")
+max_days = st.sidebar.number_input("Deliver within (days)", min_value=0, value=0,
+                                   help="0 = any delivery time")
 sort_by = st.sidebar.selectbox("Rank by", ["Lowest final price", "Highest rating"])
 coupon = st.sidebar.text_input("Coupon code", placeholder="e.g. SAVE10").strip().upper()
 auto_buy = st.sidebar.checkbox("Allow auto-buy (opens seller page)")
@@ -158,7 +192,7 @@ def page_home():
 
     st.markdown("### How it works")
     a, b, c = st.columns(3)
-    a.markdown("**1. You set the rules**\n\nBudget, minimum rating, delivery and coupon, once.")
+    a.markdown("**1. You set the rules**\n\nBudget, minimum rating, delivery time and coupon, once.")
     b.markdown("**2. The agent compares**\n\nLive prices from real sellers, total cost with delivery and coupons.")
     c.markdown("**3. You approve**\n\nIt explains the ranking and checks out only if you allow it.")
 
@@ -197,6 +231,8 @@ def do_search(q):
             rejected.append((it, "over budget"))
         elif rating is not None and rating < min_rating:
             rejected.append((it, "rating too low"))
+        elif max_days and it.get("eta") is not None and it["eta"] > max_days:
+            rejected.append((it, f"delivery too slow (~{it['eta']} days)"))
         else:
             ok.append(it)
     if sort_by == "Highest rating":
@@ -208,13 +244,14 @@ def do_search(q):
     if ok:
         try:
             expl = gemini("In 3 short bullets, explain why the first item is the best pick for a shopper. "
-                          f"Rules: budget {budget}, min rating {min_rating}. "
+                          f"Rules: budget {budget}, min rating {min_rating}, "
+                          f"deliver within {max_days or 'any'} days. "
                           f"Options (final = price + delivery - discount): {json.dumps(ok[:3])}")
         except Exception:
             expl = "Ranked by your rules (AI explanation unavailable right now)."
     st.session_state.res = {"ok": ok, "rejected": rejected, "expl": expl, "product": rules["product"],
-                            "budget": budget, "coupon": applied, "q": q}
-    log_action(f"search '{q}' -> {len(ok)} passed, {len(rejected)} rejected")
+                            "budget": budget, "coupon": applied, "q": q, "max_days": max_days}
+    log_action(f"search '{q}' (within {max_days or 'any'} days) -> {len(ok)} passed, {len(rejected)} rejected")
 
 def page_shop():
     st.header("🛒 Smart Shop")
@@ -235,11 +272,13 @@ def page_shop():
         return
     ok, rejected = res["ok"], res["rejected"]
     budget_txt = "no limit" if res["budget"] >= 10**9 else f"₹{res['budget']:,.0f}"
-    st.write(f"**Product:** {res['product']}  |  **Budget:** {budget_txt}"
+    days_txt = f"{res['max_days']} days" if res.get("max_days") else "any"
+    st.write(f"**Product:** {res['product']}  |  **Budget:** {budget_txt}  |  **Deliver within:** {days_txt}"
              + (f"  |  **Coupon:** {res['coupon']}" if res["coupon"] else ""))
 
     if not ok:
-        st.warning("No product met all your rules. Try raising the budget or lowering the rating.")
+        st.warning("No product met all your rules. Try raising the budget, lowering the rating, "
+                   "or allowing more delivery days.")
     else:
         avg = sum(x["final"] for x in ok) / len(ok)
         m1, m2, m3, m4 = st.columns(4)
@@ -261,6 +300,8 @@ def page_shop():
                 if it["discount"]:
                     line += f" − coupon ₹{it['discount']:,.0f}"
                 st.write(f"{line} = **₹{it['final']:,.0f}**  |  {it['seller']}  |  rating: {it['rating'] or 'n/a'}")
+                st.caption(f"🚚 Arrives in ~{it['eta']} days" if it.get("eta") is not None
+                           else "🚚 Delivery time: check seller site")
                 b1, b2 = st.columns(2)
                 if it.get("link"):
                     b1.link_button("View on seller site", it["link"])
